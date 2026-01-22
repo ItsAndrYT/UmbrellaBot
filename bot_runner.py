@@ -7,7 +7,7 @@ from aiohttp import web
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from main import dp, bot
+    from main import dp, bot, main
     print("✅ Модули импортированы")
 except Exception as e:
     print(f"❌ Ошибка импорта: {e}")
@@ -19,11 +19,14 @@ async def handle_webhook(request):
         data = await request.json()
         from aiogram.types import Update
         update = Update(**data)
-        await dp.feed_update(bot, update)
+        
+        # Обрабатываем асинхронно, не блокируя ответ
+        asyncio.create_task(dp.feed_update(bot, update))
+        
         return web.Response(text="OK")
     except Exception as e:
-        print(f"❌ Ошибка webhook: {e}")
-        return web.Response(text="ERROR", status=500)
+        print(f"⚠️ Ошибка в webhook (игнорируем): {e}")
+        return web.Response(text="OK")  # Всегда отвечаем OK
 
 async def handle_health(request):
     return web.Response(text="✅ Bot is running!")
@@ -31,15 +34,24 @@ async def handle_health(request):
 async def startup(app):
     print("🚀 Запускаю бота...")
     
-    # Устанавливаем вебхук
+    # 1. УДАЛЯЕМ ВСЕ СТАРЫЕ ОБНОВЛЕНИЯ
     try:
-        # Получаем URL из Render
-        render_url = os.getenv('RENDER_EXTERNAL_URL', 'https://umbrellabot-cqpu.onrender.com')
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("✅ Старые обновления удалены")
+    except Exception as e:
+        print(f"⚠️ Не удалось удалить старые обновления: {e}")
+    
+    # 2. Инициализируем бота
+    await main()
+    
+    # 3. Устанавливаем вебхук заново
+    try:
+        render_url = 'https://umbrellabot-cqpu.onrender.com'
         webhook_url = f"{render_url}/webhook"
         await bot.set_webhook(webhook_url)
         print(f"✅ Вебхук установлен: {webhook_url}")
     except Exception as e:
-        print(f"⚠️ Вебхук не установлен: {e}")
+        print(f"⚠️ Ошибка вебхука: {e}")
 
 async def shutdown(app):
     try:
