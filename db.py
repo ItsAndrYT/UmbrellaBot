@@ -6,15 +6,14 @@ DATABASE_PATH = "database.db"
 # ===== ИНИЦИАЛИЗАЦИЯ БАЗЫ =====
 async def init_db():
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        # Таблица пользователей
+        # Таблица пользователей (БЕЗ updated_at)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
                 bonus_balance INTEGER DEFAULT 0,
                 first_purchase_done INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
@@ -37,12 +36,11 @@ async def init_db():
                 
                 uah_final_price INTEGER,
                 
-                status TEXT DEFAULT 'pending',  -- pending, proof_required, approved, rejected
+                status TEXT DEFAULT 'pending',
                 proof_text TEXT,
                 proof_photo_id TEXT,
                 
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 
                 FOREIGN KEY (user_id) REFERENCES users (user_id)
             )
@@ -68,10 +66,26 @@ async def init_db():
 async def upsert_user(user_id: int, username: str = None):
     """Добавить или обновить пользователя"""
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute('''
-            INSERT OR REPLACE INTO users (user_id, username, updated_at)
-            VALUES (?, ?, ?)
-        ''', (user_id, username, datetime.datetime.now().isoformat()))
+        # Проверяем существует ли пользователь
+        cursor = await db.execute(
+            "SELECT 1 FROM users WHERE user_id = ?", 
+            (user_id,)
+        )
+        exists = await cursor.fetchone()
+        
+        if exists:
+            # Обновляем username если изменился
+            await db.execute(
+                "UPDATE users SET username = ? WHERE user_id = ?",
+                (username, user_id)
+            )
+        else:
+            # Создаем нового пользователя
+            await db.execute(
+                "INSERT INTO users (user_id, username) VALUES (?, ?)",
+                (user_id, username)
+            )
+        
         await db.commit()
 
 async def get_user(user_id: int):
@@ -148,8 +162,8 @@ async def set_order_status(order_id: int, status: str):
     """Изменить статус заказа"""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute(
-            "UPDATE orders SET status = ?, updated_at = ? WHERE id = ?",
-            (status, datetime.datetime.now().isoformat(), order_id)
+            "UPDATE orders SET status = ? WHERE id = ?",
+            (status, order_id)
         )
         await db.commit()
 
@@ -158,9 +172,9 @@ async def add_proof(order_id: int, user_id: int, text: str = None, photo_id: str
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute('''
             UPDATE orders 
-            SET proof_text = ?, proof_photo_id = ?, status = 'proof_required', updated_at = ?
+            SET proof_text = ?, proof_photo_id = ?, status = 'proof_required'
             WHERE id = ? AND user_id = ?
-        ''', (text, photo_id, datetime.datetime.now().isoformat(), order_id, user_id))
+        ''', (text, photo_id, order_id, user_id))
         await db.commit()
 
 async def list_user_orders(user_id: int):
@@ -187,9 +201,9 @@ async def add_bonus(user_id: int, amount: int, reason: str = "admin", order_id: 
         # Обновляем баланс
         await db.execute('''
             UPDATE users 
-            SET bonus_balance = bonus_balance + ?, updated_at = ?
+            SET bonus_balance = bonus_balance + ?
             WHERE user_id = ?
-        ''', (amount, datetime.datetime.now().isoformat(), user_id))
+        ''', (amount, user_id))
         
         await db.commit()
 
@@ -205,52 +219,8 @@ async def consume_bonus(user_id: int, amount: int):
         # Обновляем баланс
         await db.execute('''
             UPDATE users 
-            SET bonus_balance = bonus_balance - ?, updated_at = ?
+            SET bonus_balance = bonus_balance - ?
             WHERE user_id = ?
-        ''', (amount, datetime.datetime.now().isoformat(), user_id))
+        ''', (amount, user_id))
         
         await db.commit()
-
-# ===== АДМИН СТАТИСТИКА =====
-async def get_all_orders(limit: int = 100):
-    """Получить все заказы (для админа)"""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        cursor = await db.execute(
-            "SELECT * FROM orders ORDER BY created_at DESC LIMIT ?",
-            (limit,)
-        )
-        rows = await cursor.fetchall()
-        columns = [description[0] for description in cursor.description]
-        return [dict(zip(columns, row)) for row in rows]
-
-async def get_stats():
-    """Получить статистику (для админа)"""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        # Общее количество заказов
-        cursor = await db.execute("SELECT COUNT(*) FROM orders")
-        total_orders = (await cursor.fetchone())[0]
-        
-        # Заказы по статусам
-        cursor = await db.execute("""
-            SELECT status, COUNT(*) as count 
-            FROM orders 
-            GROUP BY status
-        """)
-        status_stats = {row[0]: row[1] for row in await cursor.fetchall()}
-        
-        # Общая выручка
-        cursor = await db.execute("""
-            SELECT 
-                SUM(stars_final_price) as total_stars,
-                SUM(uah_final_price) as total_uah
-            FROM orders 
-            WHERE status = 'approved'
-        """)
-        revenue_row = await cursor.fetchone()
-        
-        return {
-            "total_orders": total_orders,
-            "status_stats": status_stats,
-            "total_stars": revenue_row[0] or 0,
-            "total_uah": revenue_row[1] or 0
-        }
