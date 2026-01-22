@@ -9,8 +9,16 @@ from aiogram.exceptions import TelegramBadRequest
 
 # ===== КОНФИГУРАЦИЯ =====
 BOT_TOKEN = "8578950640:AAG-_tcpG0NUAkKp3drcBDU2_tFv-RNbNIs"
+ADMIN_ID = 700985795
+SUPPORT_USERNAME = "TakeTGOwner"
+PAY_STARS_USERNAME = "QweAndrey"
+REQUIRED_CHANNEL = "@umbrellatgteam"
+REVIEWS_URL = "https://t.me/otzivumbrella"
+UA_CARD_INFO = "🇺🇦 Карта: 4218 5500 0965 1709"
+UA_CARD_NAME = "Andrii Pohodin"
+NEWBIE_DISCOUNT_STARS = 5
 
-# ===== СОЗДАЕМ БОТА И ДИСПЕТЧЕРА ГЛОБАЛЬНО =====
+# ===== СОЗДАЕМ БОТА И ДИСПЕТЧЕРА =====
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
@@ -18,9 +26,51 @@ dp = Dispatcher()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ===== КАТАЛОГ И ЦЕНЫ =====
+STARS_PRICE = {"basic": 25, "premium": 50}
+UAH_PRICE = {"basic": 15, "premium": 30}
+
+CATALOG = {
+    "basic": {
+        "title": "🔹 BASIC",
+        "countries": [
+            ("IN", "🇮🇳 Индия"),
+            ("ID", "🇮🇩 Индонезия"),
+            ("PH", "🇵🇭 Филиппины"),
+            ("TH", "🇹🇭 Таиланд"),
+            ("MY", "🇲🇾 Малайзия"),
+            ("BD", "🇧🇩 Бангладеш"),
+            ("MM", "🇲🇲 Мьянма"),
+            ("NG", "🇳🇬 Нигерия"),
+            ("KE", "🇰🇪 Кения"),
+            ("EG", "🇪🇬 Египет"),
+            ("PE", "🇵🇪 Перу"),
+        ],
+    },
+    "premium": {
+        "title": "⭐ PREMIUM",
+        "countries": [
+            ("US", "🇺🇸 США"),
+            ("CA", "🇨🇦 Канада"),
+            ("UA", "🇺🇦 Украина"),
+            ("BY", "🇧🇾 Беларусь"),
+        ],
+    }
+}
+
+# ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
+WAITING_PROOF = {}  # user_id: order_id
+
+# ===== ПОЛУЧЕНИЕ НАЗВАНИЯ СТРАНЫ =====
+def get_country_name(level: str, code: str) -> str:
+    for country_code, country_name in CATALOG[level]["countries"]:
+        if country_code == code:
+            return country_name
+    return code
+
 # ===== КЛАВИАТУРЫ =====
 def main_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
+    keyboard = [
         [
             InlineKeyboardButton(text="🛒 Купить", callback_data="buy"),
             InlineKeyboardButton(text="📦 Мои покупки", callback_data="purchases")
@@ -30,17 +80,77 @@ def main_menu():
             InlineKeyboardButton(text="🛡 Гарантия", callback_data="guarantee")
         ],
         [
-            InlineKeyboardButton(text="⭐ Отзывы", url="https://t.me/otzivumbrella"),
-            InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/TakeTGOwner")
-        ],
+            InlineKeyboardButton(text="⭐ Отзывы", url=REVIEWS_URL),
+            InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{SUPPORT_USERNAME}")
+        ]
+    ]
+    
+    if REQUIRED_CHANNEL:
+        keyboard.append([
+            InlineKeyboardButton(text="📢 Наш канал", url=f"https://t.me/{REQUIRED_CHANNEL.lstrip('@')}")
+        ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def levels_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/umbrellatgteam")
+            InlineKeyboardButton(text="🔹 BASIC - 25⭐", callback_data="level:basic"),
+            InlineKeyboardButton(text="⭐ PREMIUM - 50⭐", callback_data="level:premium")
+        ],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")]
+    ])
+
+def countries_keyboard(level: str):
+    countries = CATALOG[level]["countries"]
+    buttons = []
+    
+    for i in range(0, len(countries), 2):
+        row = []
+        code1, name1 = countries[i]
+        row.append(InlineKeyboardButton(text=name1, callback_data=f"country:{level}:{code1}"))
+        
+        if i + 1 < len(countries):
+            code2, name2 = countries[i + 1]
+            row.append(InlineKeyboardButton(text=name2, callback_data=f"country:{level}:{code2}"))
+        
+        buttons.append(row)
+    
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="buy")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def payment_keyboard(level: str, country: str):
+    has_card = bool(UA_CARD_INFO.strip())
+    
+    buttons = [
+        [InlineKeyboardButton(text="⭐ Оплата Stars", callback_data=f"pay:{level}:{country}:stars")]
+    ]
+    
+    if has_card:
+        buttons[0].append(InlineKeyboardButton(text="🇺🇦 Карта", callback_data=f"pay:{level}:{country}:card"))
+    
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"level:{level}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def after_payment_keyboard(order_id: int):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"paid:{order_id}")],
+        [
+            InlineKeyboardButton(text="🔄 Выбрать другой", callback_data="buy"),
+            InlineKeyboardButton(text="🏠 Главная", callback_data="back")
+        ]
+    ])
+
+def admin_keyboard(order_id: int):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"admin:approve:{order_id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"admin:reject:{order_id}")
         ]
     ])
 
 # ===== БЕЗОПАСНОЕ РЕДАКТИРОВАНИЕ =====
 async def safe_edit_message(callback: CallbackQuery, text: str, reply_markup=None):
-    """Безопасное редактирование без ошибок"""
     try:
         await callback.message.edit_text(text, reply_markup=reply_markup)
         return True
@@ -56,11 +166,10 @@ async def safe_edit_message(callback: CallbackQuery, text: str, reply_markup=Non
 # ===== ОБРАБОТЧИКИ КОМАНД =====
 @dp.message(CommandStart())
 async def start_command(message: Message):
-    """Обработчик команды /start"""
     try:
         text = (
-            "☂️ Добро пожаловать в UmbrellaTeam!\n\n"
-            "🎁 Новым клиентам скидка 5⭐ на первый заказ!\n\n"
+            f"☂️ Добро пожаловать в UmbrellaTeam!\n\n"
+            f"🎁 Новым клиентам: скидка {NEWBIE_DISCOUNT_STARS}⭐ на первый Stars-заказ!\n\n"
             "Выбирайте действие:"
         )
         await message.answer(text, reply_markup=main_menu())
@@ -69,30 +178,27 @@ async def start_command(message: Message):
 
 @dp.message(Command("help"))
 async def help_command(message: Message):
-    """Обработчик команды /help"""
     await message.answer(
         "📚 Помощь по боту:\n\n"
         "/start - Главное меню\n"
         "/help - Эта справка\n\n"
-        "💬 Поддержка: @TakeTGOwner\n"
-        "⭐ Отзывы: https://t.me/otzivumbrella"
+        f"💬 Поддержка: @{SUPPORT_USERNAME}\n"
+        f"⭐ Отзывы: {REVIEWS_URL}"
     )
 
-# ===== ОБРАБОТЧИКИ КНОПОК =====
+# ===== ОБРАБОТЧИКИ КНОПОК ГЛАВНОГО МЕНЮ =====
+@dp.callback_query(F.data == "back")
+async def back_handler(callback: CallbackQuery):
+    await callback.answer()
+    await safe_edit_message(callback, "Главное меню:", main_menu())
+
 @dp.callback_query(F.data == "buy")
 async def buy_handler(callback: CallbackQuery):
-    """Кнопка 'Купить'"""
     await callback.answer()
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔹 BASIC - 25⭐", callback_data="level_basic")],
-        [InlineKeyboardButton(text="⭐ PREMIUM - 50⭐", callback_data="level_premium")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")]
-    ])
-    await safe_edit_message(callback, "Выберите уровень:", keyboard)
+    await safe_edit_message(callback, "Выберите уровень:", levels_keyboard())
 
 @dp.callback_query(F.data == "purchases")
 async def purchases_handler(callback: CallbackQuery):
-    """Кнопка 'Мои покупки'"""
     await callback.answer()
     text = (
         "📦 Ваши покупки:\n\n"
@@ -104,59 +210,184 @@ async def purchases_handler(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "how")
 async def how_handler(callback: CallbackQuery):
-    """Кнопка 'Как купить'"""
     await callback.answer()
     text = (
         "📘 Как купить:\n\n"
         "1️⃣ Нажмите 'Купить'\n"
         "2️⃣ Выберите уровень (BASIC/PREMIUM)\n"
         "3️⃣ Выберите страну\n"
-        "4️⃣ Выберите способ оплаты\n"
+        "4️⃣ Выберите способ оплаты (Stars/Карта)\n"
         "5️⃣ Оплатите и отправьте подтверждение\n"
         "6️⃣ Получите аккаунт!\n\n"
-        "🎁 Новым клиентам скидка 5⭐!\n\n"
+        f"🎁 Новым клиентам скидка {NEWBIE_DISCOUNT_STARS}⭐!\n\n"
         "⬇️ Выберите действие:"
     )
     await safe_edit_message(callback, text, main_menu())
 
 @dp.callback_query(F.data == "guarantee")
 async def guarantee_handler(callback: CallbackQuery):
-    """Кнопка 'Гарантия'"""
     await callback.answer()
     text = (
-        "🛡 Гарантия:\n\n"
-        "✅ 48 часов на замену аккаунта\n"
-        "✅ Быстрая поддержка\n"
-        "✅ Возврат при проблемах\n\n"
-        "📞 Поддержка: @TakeTGOwner\n\n"
+        "🛡 Гарантия 48 часов\n\n"
+        "✅ В случае проблем с аккаунтом в течение 48 часов — бесплатная замена\n"
+        "✅ Быстрая поддержка 24/7\n"
+        "✅ Честные условия\n\n"
+        f"📞 Поддержка: @{SUPPORT_USERNAME}\n\n"
         "⬇️ Выберите действие:"
     )
     await safe_edit_message(callback, text, main_menu())
 
-@dp.callback_query(F.data == "back")
-async def back_handler(callback: CallbackQuery):
-    """Кнопка 'Назад'"""
-    await callback.answer()
-    await safe_edit_message(callback, "Главное меню:", main_menu())
-
-@dp.callback_query(F.data.in_(["level_basic", "level_premium"]))
+# ===== ЛОГИКА ПОКУПКИ =====
+@dp.callback_query(F.data.startswith("level:"))
 async def level_handler(callback: CallbackQuery):
-    """Выбор уровня"""
     await callback.answer()
-    level = "BASIC" if "basic" in callback.data else "PREMIUM"
-    price = "25⭐" if level == "BASIC" else "50⭐"
+    level = callback.data.split(":")[1]
     
     text = (
-        f"Вы выбрали {level} ({price})\n\n"
-        "Временно недоступно. Скоро добавим!\n\n"
-        "⬇️ Выберите действие:"
+        f"{CATALOG[level]['title']}\n"
+        f"⭐ Stars: {STARS_PRICE[level]}⭐\n"
+        f"🇺🇦 Карта: {UAH_PRICE[level]} грн\n\n"
+        "Выберите страну:"
     )
-    await safe_edit_message(callback, text, main_menu())
+    
+    await safe_edit_message(callback, text, countries_keyboard(level))
+
+@dp.callback_query(F.data.startswith("country:"))
+async def country_handler(callback: CallbackQuery):
+    await callback.answer()
+    _, level, country_code = callback.data.split(":")
+    country_name = get_country_name(level, country_code)
+    
+    text = (
+        f"{CATALOG[level]['title']}\n"
+        f"Страна: {country_name}\n\n"
+        "Выберите способ оплаты:"
+    )
+    
+    await safe_edit_message(callback, text, payment_keyboard(level, country_code))
+
+@dp.callback_query(F.data.startswith("pay:"))
+async def payment_handler(callback: CallbackQuery):
+    await callback.answer()
+    _, level, country_code, method = callback.data.split(":")
+    country_name = get_country_name(level, country_code)
+    
+    # Генерируем номер заказа (в реальности нужно сохранять в БД)
+    import random
+    order_id = random.randint(1000, 9999)
+    
+    if method == "stars":
+        price = STARS_PRICE[level]
+        text = (
+            f"🧾 Заказ #{order_id}\n"
+            f"Уровень: {CATALOG[level]['title']}\n"
+            f"Страна: {country_name}\n"
+            f"Цена: {price}⭐\n\n"
+            f"⭐ Оплата Stars подарком на аккаунт @{PAY_STARS_USERNAME}\n"
+            f"Сумма: {price}⭐\n\n"
+            "После оплаты нажми «Я оплатил» и отправь подтверждение."
+        )
+    else:  # card
+        price = UAH_PRICE[level]
+        name_line = f"\nПолучатель: {UA_CARD_NAME}" if UA_CARD_NAME else ""
+        text = (
+            f"🧾 Заказ #{order_id}\n"
+            f"Уровень: {CATALOG[level]['title']}\n"
+            f"Страна: {country_name}\n"
+            f"К оплате: {price} грн 🇺🇦\n\n"
+            f"🇺🇦 Оплата картой Украины\n{UA_CARD_INFO}{name_line}\n"
+            f"Сумма: {price} грн 🇺🇦\n\n"
+            "После оплаты нажми «Я оплатил» и отправь скрин перевода."
+        )
+    
+    # Сохраняем order_id для проверки оплаты
+    WAITING_PROOF[callback.from_user.id] = order_id
+    
+    await safe_edit_message(callback, text, after_payment_keyboard(order_id))
+
+@dp.callback_query(F.data.startswith("paid:"))
+async def paid_handler(callback: CallbackQuery):
+    await callback.answer()
+    order_id = int(callback.data.split(":")[1])
+    
+    if callback.from_user.id not in WAITING_PROOF or WAITING_PROOF[callback.from_user.id] != order_id:
+        await callback.answer("Заказ не найден", show_alert=True)
+        return
+    
+    text = f"✅ Заказ #{order_id} отмечен как оплаченный.\nТеперь отправь подтверждение (скрин/текст)."
+    
+    await safe_edit_message(callback, text, None)
+
+# ===== ПОДТВЕРЖДЕНИЯ ОПЛАТЫ =====
+@dp.message(F.photo)
+async def proof_photo(message: Message):
+    if message.from_user.id not in WAITING_PROOF:
+        return
+    
+    order_id = WAITING_PROOF.pop(message.from_user.id)
+    file_id = message.photo[-1].file_id
+    
+    # Отправляем админу
+    try:
+        await bot.send_photo(
+            ADMIN_ID,
+            file_id,
+            caption=f"📸 Подтверждение оплаты\nЗаказ #{order_id}\nОт: @{message.from_user.username or message.from_user.id}",
+            reply_markup=admin_keyboard(order_id)
+        )
+        await message.answer("✅ Подтверждение получено! Проверяем оплату, скоро ответим.")
+    except Exception as e:
+        await message.answer("✅ Скрин получен! Ожидайте проверки.")
+        logger.error(f"Ошибка отправки админу: {e}")
+
+@dp.message(F.text)
+async def proof_text(message: Message):
+    if message.from_user.id not in WAITING_PROOF:
+        return
+    
+    order_id = WAITING_PROOF.pop(message.from_user.id)
+    
+    # Отправляем админу
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            f"📝 Подтверждение оплаты (текст)\n"
+            f"Заказ #{order_id}\n"
+            f"От: @{message.from_user.username or message.from_user.id}\n\n"
+            f"Текст: {message.text}",
+            reply_markup=admin_keyboard(order_id)
+        )
+        await message.answer("✅ Текст подтверждения получен! Проверяем оплату.")
+    except Exception as e:
+        await message.answer("✅ Подтверждение получено! Ожидайте проверки.")
+        logger.error(f"Ошибка отправки админу: {e}")
+
+# ===== АДМИН ПАНЕЛЬ =====
+@dp.callback_query(F.data.startswith("admin:"))
+async def admin_handler(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    
+    action, order_id = callback.data.split(":")[1], int(callback.data.split(":")[2])
+    
+    # В реальности здесь нужно искать пользователя по order_id в БД
+    # Сейчас просто имитируем
+    
+    if action == "approve":
+        await callback.answer("✅ Заказ подтвержден")
+        await callback.message.edit_text(
+            f"{callback.message.text}\n\n✅ ПОДТВЕРЖДЕНО АДМИНОМ"
+        )
+    elif action == "reject":
+        await callback.answer("❌ Заказ отклонен")
+        await callback.message.edit_text(
+            f"{callback.message.text}\n\n❌ ОТКЛОНЕНО АДМИНОМ"
+        )
 
 # ===== ОБРАБОТКА ЛЮБЫХ СООБЩЕНИЙ =====
 @dp.message()
 async def any_message(message: Message):
-    """Обработка любых текстовых сообщений"""
     if message.text and not message.text.startswith('/'):
         await message.answer(
             "Используйте кнопки меню или команду /start",
@@ -165,9 +396,7 @@ async def any_message(message: Message):
 
 # ===== ИНИЦИАЛИЗАЦИЯ БОТА =====
 async def initialize_bot():
-    """Инициализация бота - ВАЖНО: должна быть асинхронной"""
     try:
-        # Проверяем что бот доступен
         me = await bot.get_me()
         print(f"✅ Бот @{me.username} готов к работе!")
         return True
@@ -177,17 +406,14 @@ async def initialize_bot():
 
 # ===== ГЛАВНАЯ ФУНКЦИЯ =====
 async def main():
-    """Основная функция для запуска бота"""
     success = await initialize_bot()
     if success:
         print("🤖 Бот инициализирован успешно!")
-        print("📡 Режим работы: webhook (через bot_runner.py)")
+        print("📡 Режим работы: webhook")
     else:
         print("⚠️ Бот инициализирован с ошибками")
 
-# ===== ТОЧКА ВХОДА ДЛЯ ЛОКАЛЬНОГО ТЕСТИРОВАНИЯ =====
+# ===== ТОЧКА ВХОДА =====
 if __name__ == "__main__":
-    # Этот блок выполняется только при запуске main.py напрямую
-    # На Render используется bot_runner.py
     print("⚠️ Запуск напрямую не поддерживается на Render")
     print("ℹ️ Используйте: python bot_runner.py")
