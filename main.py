@@ -164,6 +164,87 @@ async def cb_buy(cb: CallbackQuery):
     await cb.message.edit_text("Выберите уровень:", reply_markup=kb_levels())
     await cb.answer()
 
+# ===== НОВЫЕ ОБРАБОТЧИКИ ДЛЯ КНОПОК =====
+@dp.callback_query(F.data == "m:purchases")
+async def cb_purchases(cb: CallbackQuery):
+    """Кнопка 'Мои покупки'"""
+    if not await is_subscribed(cb.from_user.id):
+        await show_sub_gate(cb)
+        await cb.answer()
+        return
+    
+    # Получаем заказы пользователя
+    orders = await list_user_orders(cb.from_user.id)
+    
+    if not orders:
+        text = "📭 У вас пока нет покупок."
+    else:
+        text = "📦 Ваши покупки:\n\n"
+        for order in orders:
+            status_icons = {
+                "pending": "⏳",
+                "proof_required": "📸",
+                "approved": "✅",
+                "rejected": "❌"
+            }
+            status = status_icons.get(order["status"], "❓")
+            price = f"{order['stars_final_price']}⭐" if order["pay_method"] == "stars" else f"{order['uah_final_price']} грн"
+            text += f"{status} Заказ #{order['id']}\n"
+            text += f"   {order['level_title']} - {order['country_label']}\n"
+            text += f"   Цена: {price}\n"
+            text += f"   Дата: {order['created_at'][:10]}\n\n"
+    
+    text += "\n⬇️ Выберите действие:"
+    await cb.message.edit_text(text, reply_markup=main_menu_markup())
+    await cb.answer()
+
+@dp.callback_query(F.data == "m:how")
+async def cb_how(cb: CallbackQuery):
+    """Кнопка 'Как купить'"""
+    if not await is_subscribed(cb.from_user.id):
+        await show_sub_gate(cb)
+        await cb.answer()
+        return
+    
+    text = (
+        "📘 Как происходит покупка:\n\n"
+        "1) Выбираешь уровень и страну\n"
+        "2) Выбираешь оплату (⭐ Stars / 🇺🇦 карта)\n"
+        "3) Нажимаешь «Я оплатил»\n"
+        "4) Отправляешь скрин/пруф\n"
+        "5) Я подтверждаю — и выдаю аккаунт\n\n"
+        f"⭐ Stars: оплата подарком на аккаунт @{PAY_STARS_USERNAME}.\n"
+        f"🇺🇦 Карта: перевод на украинскую карту.\n\n"
+        f"🎁 Новым клиентам: скидка {NEWBIE_DISCOUNT_STARS}⭐ на первый Stars-заказ!\n\n"
+        "⬇️ Выберите действие:"
+    )
+    await cb.message.edit_text(text, reply_markup=main_menu_markup())
+    await cb.answer()
+
+@dp.callback_query(F.data == "m:guarantee")
+async def cb_guarantee(cb: CallbackQuery):
+    """Кнопка 'Гарантия'"""
+    if not await is_subscribed(cb.from_user.id):
+        await show_sub_gate(cb)
+        await cb.answer()
+        return
+    
+    text = (
+        "🛡 Гарантия 48 часов\n\n"
+        "В случае проблем с аккаунтом в течение 48 часов после выдачи — бесплатная замена.\n\n"
+        "Условия гарантии:\n"
+        "• Аккаунт не менял пароль\n"
+        "• Не было подозрительной активности\n"
+        "• В течение 48 часов с момента выдачи\n\n"
+        "Для замены:\n"
+        "1) Напиши в поддержку: @TakeTGOwner\n"
+        "2) Укажи номер заказа\n"
+        "3) Опиши проблему\n\n"
+        "⬇️ Выберите действие:"
+    )
+    await cb.message.edit_text(text, reply_markup=main_menu_markup())
+    await cb.answer()
+
 @dp.callback_query(F.data.startswith("lvl:"))
 async def cb_level(cb: CallbackQuery):
     if not await is_subscribed(cb.from_user.id):
@@ -333,10 +414,38 @@ async def admin_actions(cb: CallbackQuery):
         await bot.send_message(user_id, f"🎁 Начислен бонус: +{amount}⭐")
         await cb.answer(f"Бонус +{amount} ✅")
 
-# ===== MAIN =====
-async def main():
+# ===== ИНИЦИАЛИЗАЦИЯ БАЗЫ =====
+async def initialize():
+    """Инициализация базы данных (вызывается при старте)"""
     await init_db()
+    print("✅ База данных инициализирована")
+    print(f"🤖 Бот @{(await bot.get_me()).username} готов к работе!")
+
+# ===== ДЛЯ ЛОКАЛЬНОГО ЗАПУСКА (polling) =====
+async def start_polling():
+    """Запуск бота в режиме polling (для локального тестирования)"""
+    await initialize()
+    print("🔄 Запускаю polling...")
     await dp.start_polling(bot)
 
+# ===== ДЛЯ СЕРВЕРА (webhook) =====
+async def setup_webhook():
+    """Настройка вебхука (для сервера)"""
+    await initialize()
+    # Вебхук устанавливается в bot_runner.py
+
+# ===== ТОЧКА ВХОДА =====
+async def main():
+    """Основная функция"""
+    # Вызываем инициализацию
+    await setup_webhook()
+
+# Для локального запуска (на Render этот блок НЕ ВЫПОЛНЯЕТСЯ!)
 if __name__ == "__main__":
+    # Если хочешь тестировать локально с polling, раскомментируй:
+    # asyncio.run(start_polling())
+    
+    # Или просто инициализируй:
     asyncio.run(main())
+    print("📡 Бот работает в режиме webhook")
+    print("🌐 Для запуска используй: python bot_runner.py")
