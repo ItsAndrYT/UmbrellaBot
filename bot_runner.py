@@ -14,19 +14,20 @@ except Exception as e:
     sys.exit(1)
 
 async def handle_webhook(request):
-    """Обработчик вебхуков"""
+    """Обработчик вебхуков - УПРОЩЕННЫЙ"""
     try:
         data = await request.json()
         from aiogram.types import Update
         update = Update(**data)
         
-        # Обрабатываем асинхронно, не блокируя ответ
+        # Обрабатываем НЕМЕДЛЕННО без await
         asyncio.create_task(dp.feed_update(bot, update))
         
+        # Сразу отвечаем OK
         return web.Response(text="OK")
     except Exception as e:
-        print(f"⚠️ Ошибка в webhook (игнорируем): {e}")
-        return web.Response(text="OK")  # Всегда отвечаем OK
+        # Даже при ошибке отвечаем OK, чтобы Telegram не повторял запрос
+        return web.Response(text="OK")
 
 async def handle_health(request):
     return web.Response(text="✅ Bot is running!")
@@ -34,17 +35,17 @@ async def handle_health(request):
 async def startup(app):
     print("🚀 Запускаю бота...")
     
-    # 1. УДАЛЯЕМ ВСЕ СТАРЫЕ ОБНОВЛЕНИЯ
+    # ВАЖНО: Удаляем ВСЕ старые обновления
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         print("✅ Старые обновления удалены")
     except Exception as e:
-        print(f"⚠️ Не удалось удалить старые обновления: {e}")
+        print(f"⚠️ Ошибка очистки: {e}")
     
-    # 2. Инициализируем бота
+    # Инициализируем базу
     await main()
     
-    # 3. Устанавливаем вебхук заново
+    # Устанавливаем вебхук
     try:
         render_url = 'https://umbrellabot-cqpu.onrender.com'
         webhook_url = f"{render_url}/webhook"
@@ -53,12 +54,9 @@ async def startup(app):
     except Exception as e:
         print(f"⚠️ Ошибка вебхука: {e}")
 
+# НЕ удаляем вебхук при shutdown - иначе будут ошибки
 async def shutdown(app):
-    try:
-        await bot.delete_webhook()
-        print("🛑 Вебхук удален")
-    except:
-        pass
+    print("🛑 Остановка сервера...")
 
 def create_app():
     app = web.Application()
