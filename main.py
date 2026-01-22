@@ -1,5 +1,9 @@
 import asyncio
 import logging
+import random
+import json
+import os
+from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -18,7 +22,102 @@ UA_CARD_INFO = "🇺🇦 Карта: 4218 5500 0965 1709"
 UA_CARD_NAME = "Andrii Pohodin"
 NEWBIE_DISCOUNT_STARS = 5
 
-# ===== СОЗДАЕМ БОТА И ДИСПЕТЧЕРА =====
+# ===== БАЗА ДАННЫХ (JSON файл) =====
+DB_FILE = "orders.json"
+
+def load_orders():
+    """Загружаем заказы из файла"""
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {"orders": {}, "last_id": 0}
+
+def save_orders(data):
+    """Сохраняем заказы в файл"""
+    with open(DB_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def add_order(user_id, username, level, country, payment_method, price, currency):
+    """Добавляем новый заказ"""
+    data = load_orders()
+    order_id = data["last_id"] + 1
+    
+    order = {
+        "id": order_id,
+        "user_id": user_id,
+        "username": username,
+        "level": level,
+        "country": country,
+        "payment_method": payment_method,
+        "price": price,
+        "currency": currency,
+        "status": "pending",  # pending, proof_sent, approved, rejected
+        "proof_photo": None,
+        "proof_text": None,
+        "created_at": datetime.now().isoformat(),
+        "approved_at": None,
+        "admin_id": None
+    }
+    
+    data["orders"][str(order_id)] = order
+    data["last_id"] = order_id
+    save_orders(data)
+    
+    return order_id
+
+def get_order(order_id):
+    """Получаем заказ по ID"""
+    data = load_orders()
+    return data["orders"].get(str(order_id))
+
+def update_order_status(order_id, status, proof_photo=None, proof_text=None):
+    """Обновляем статус заказа"""
+    data = load_orders()
+    if str(order_id) in data["orders"]:
+        data["orders"][str(order_id)]["status"] = status
+        if proof_photo:
+            data["orders"][str(order_id)]["proof_photo"] = proof_photo
+        if proof_text:
+            data["orders"][str(order_id)]["proof_text"] = proof_text
+        save_orders(data)
+        return True
+    return False
+
+def approve_order(order_id, admin_id):
+    """Подтверждаем заказ"""
+    data = load_orders()
+    if str(order_id) in data["orders"]:
+        data["orders"][str(order_id)]["status"] = "approved"
+        data["orders"][str(order_id)]["approved_at"] = datetime.now().isoformat()
+        data["orders"][str(order_id)]["admin_id"] = admin_id
+        save_orders(data)
+        return True
+    return False
+
+def reject_order(order_id, admin_id):
+    """Отклоняем заказ"""
+    data = load_orders()
+    if str(order_id) in data["orders"]:
+        data["orders"][str(order_id)]["status"] = "rejected"
+        data["orders"][str(order_id)]["admin_id"] = admin_id
+        save_orders(data)
+        return True
+    return False
+
+def get_user_orders(user_id):
+    """Получаем все заказы пользователя"""
+    data = load_orders()
+    user_orders = []
+    
+    for order_id, order in data["orders"].items():
+        if order["user_id"] == user_id:
+            user_orders.append(order)
+    
+    # Сортируем по дате (новые первыми)
+    user_orders.sort(key=lambda x: x["created_at"], reverse=True)
+    return user_orders
+
+# ===== БОТ =====
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
@@ -200,12 +299,37 @@ async def buy_handler(callback: CallbackQuery):
 @dp.callback_query(F.data == "purchases")
 async def purchases_handler(callback: CallbackQuery):
     await callback.answer()
-    text = (
-        "📦 Ваши покупки:\n\n"
-        "У вас пока нет покупок.\n"
-        "Совершите первый заказ через меню 'Купить'!\n\n"
-        "⬇️ Выберите действие:"
-    )
+    
+    # Получаем заказы пользователя
+    user_orders = get_user_orders(callback.from_user.id)
+    
+    if not user_orders:
+        text = "📭 У вас пока нет покупок.\nСовершите первый заказ через меню 'Купить'!"
+    else:
+        text = "📦 Ваши покупки:\n\n"
+        for order in user_orders:
+            status_icons = {
+                "pending": "⏳",
+                "proof_sent": "📸",
+                "approved": "✅",
+                "rejected": "❌"
+            }
+            
+            status = status_icons.get(order["status"], "❓")
+            price = f"{order['price']}{order['currency']}"
+            
+            text += f"{status} Заказ #{order['id']}\n"
+            text += f"   Уровень: {order['level'].upper()}\n"
+            text += f"   Страна: {order['country']}\n"
+            text += f"   Цена: {price}\n"
+            
+            if order["status"] == "approved" and order.get("approved_at"):
+                date = order["approved_at"][:10]
+                text += f"   Подтвержден: {date}\n"
+            
+            text += "\n"
+    
+    text += "\n⬇️ Выберите действие:"
     await safe_edit_message(callback, text, main_menu())
 
 @dp.callback_query(F.data == "how")
@@ -272,36 +396,42 @@ async def payment_handler(callback: CallbackQuery):
     _, level, country_code, method = callback.data.split(":")
     country_name = get_country_name(level, country_code)
     
-    # Генерируем номер заказа (в реальности нужно сохранять в БД)
-    import random
-    order_id = random.randint(1000, 9999)
-    
+    # Определяем цену и валюту
     if method == "stars":
         price = STARS_PRICE[level]
-        text = (
-            f"🧾 Заказ #{order_id}\n"
-            f"Уровень: {CATALOG[level]['title']}\n"
-            f"Страна: {country_name}\n"
-            f"Цена: {price}⭐\n\n"
-            f"⭐ Оплата Stars подарком на аккаунт @{PAY_STARS_USERNAME}\n"
-            f"Сумма: {price}⭐\n\n"
-            "После оплаты нажми «Я оплатил» и отправь подтверждение."
-        )
+        currency = "⭐"
+        payment_text = f"Stars подарком на @{PAY_STARS_USERNAME}"
     else:  # card
         price = UAH_PRICE[level]
-        name_line = f"\nПолучатель: {UA_CARD_NAME}" if UA_CARD_NAME else ""
-        text = (
-            f"🧾 Заказ #{order_id}\n"
-            f"Уровень: {CATALOG[level]['title']}\n"
-            f"Страна: {country_name}\n"
-            f"К оплате: {price} грн 🇺🇦\n\n"
-            f"🇺🇦 Оплата картой Украины\n{UA_CARD_INFO}{name_line}\n"
-            f"Сумма: {price} грн 🇺🇦\n\n"
-            "После оплаты нажми «Я оплатил» и отправь скрин перевода."
-        )
+        currency = " грн"
+        payment_text = f"картой Украины\n{UA_CARD_INFO}"
+        if UA_CARD_NAME:
+            payment_text += f"\nПолучатель: {UA_CARD_NAME}"
     
-    # Сохраняем order_id для проверки оплаты
+    # Сохраняем заказ в базу
+    order_id = add_order(
+        user_id=callback.from_user.id,
+        username=callback.from_user.username,
+        level=level.upper(),
+        country=country_name,
+        payment_method=method,
+        price=price,
+        currency=currency
+    )
+    
+    # Сохраняем для проверки оплаты
     WAITING_PROOF[callback.from_user.id] = order_id
+    
+    # Формируем текст
+    text = (
+        f"🧾 Заказ #{order_id}\n"
+        f"Уровень: {CATALOG[level]['title']}\n"
+        f"Страна: {country_name}\n"
+        f"Цена: {price}{currency}\n\n"
+        f"💳 Оплата {payment_text}\n"
+        f"Сумма: {price}{currency}\n\n"
+        "После оплаты нажми «Я оплатил» и отправь подтверждение."
+    )
     
     await safe_edit_message(callback, text, after_payment_keyboard(order_id))
 
@@ -310,9 +440,14 @@ async def paid_handler(callback: CallbackQuery):
     await callback.answer()
     order_id = int(callback.data.split(":")[1])
     
-    if callback.from_user.id not in WAITING_PROOF or WAITING_PROOF[callback.from_user.id] != order_id:
+    # Проверяем что заказ существует и принадлежит пользователю
+    order = get_order(order_id)
+    if not order or order["user_id"] != callback.from_user.id:
         await callback.answer("Заказ не найден", show_alert=True)
         return
+    
+    # Обновляем статус
+    update_order_status(order_id, "proof_sent")
     
     text = f"✅ Заказ #{order_id} отмечен как оплаченный.\nТеперь отправь подтверждение (скрин/текст)."
     
@@ -327,15 +462,28 @@ async def proof_photo(message: Message):
     order_id = WAITING_PROOF.pop(message.from_user.id)
     file_id = message.photo[-1].file_id
     
+    # Обновляем заказ
+    update_order_status(order_id, "proof_sent", proof_photo=file_id)
+    
+    # Получаем данные заказа
+    order = get_order(order_id)
+    
     # Отправляем админу
     try:
         await bot.send_photo(
             ADMIN_ID,
             file_id,
-            caption=f"📸 Подтверждение оплаты\nЗаказ #{order_id}\nОт: @{message.from_user.username or message.from_user.id}",
+            caption=(
+                f"📸 Подтверждение оплаты\n"
+                f"Заказ #{order_id}\n"
+                f"От: @{message.from_user.username or message.from_user.id}\n"
+                f"Уровень: {order['level']}\n"
+                f"Страна: {order['country']}\n"
+                f"Сумма: {order['price']}{order['currency']}"
+            ),
             reply_markup=admin_keyboard(order_id)
         )
-        await message.answer("✅ Подтверждение получено! Проверяем оплату, скоро ответим.")
+        await message.answer("✅ Скриншот получен! Проверяем оплату, скоро ответим.")
     except Exception as e:
         await message.answer("✅ Скрин получен! Ожидайте проверки.")
         logger.error(f"Ошибка отправки админу: {e}")
@@ -347,13 +495,22 @@ async def proof_text(message: Message):
     
     order_id = WAITING_PROOF.pop(message.from_user.id)
     
+    # Обновляем заказ
+    update_order_status(order_id, "proof_sent", proof_text=message.text)
+    
+    # Получаем данные заказа
+    order = get_order(order_id)
+    
     # Отправляем админу
     try:
         await bot.send_message(
             ADMIN_ID,
             f"📝 Подтверждение оплаты (текст)\n"
             f"Заказ #{order_id}\n"
-            f"От: @{message.from_user.username or message.from_user.id}\n\n"
+            f"От: @{message.from_user.username or message.from_user.id}\n"
+            f"Уровень: {order['level']}\n"
+            f"Страна: {order['country']}\n"
+            f"Сумма: {order['price']}{order['currency']}\n\n"
             f"Текст: {message.text}",
             reply_markup=admin_keyboard(order_id)
         )
@@ -362,27 +519,71 @@ async def proof_text(message: Message):
         await message.answer("✅ Подтверждение получено! Ожидайте проверки.")
         logger.error(f"Ошибка отправки админу: {e}")
 
-# ===== АДМИН ПАНЕЛЬ =====
+# ===== АДМИН ПАНЕЛЬ (ИСПРАВЛЕННАЯ!) =====
 @dp.callback_query(F.data.startswith("admin:"))
 async def admin_handler(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("Нет доступа", show_alert=True)
         return
     
-    action, order_id = callback.data.split(":")[1], int(callback.data.split(":")[2])
+    _, action, order_id_str = callback.data.split(":")
+    order_id = int(order_id_str)
     
-    # В реальности здесь нужно искать пользователя по order_id в БД
-    # Сейчас просто имитируем
+    # Получаем заказ
+    order = get_order(order_id)
+    if not order:
+        await callback.answer("Заказ не найден", show_alert=True)
+        return
     
     if action == "approve":
-        await callback.answer("✅ Заказ подтвержден")
+        # Подтверждаем заказ
+        approve_order(order_id, ADMIN_ID)
+        
+        # ОТПРАВЛЯЕМ СООБЩЕНИЕ КЛИЕНТУ
+        try:
+            await bot.send_message(
+                order["user_id"],
+                f"🎉 Поздравляем! Ваш заказ подтвержден!\n\n"
+                f"✅ Заказ #{order_id} оплачен и подтвержден\n"
+                f"📊 Уровень: {order['level']}\n"
+                f"🌍 Страна: {order['country']}\n\n"
+                f"📞 Для получения аккаунта напишите: @{SUPPORT_USERNAME}\n"
+                f"💬 Укажите номер заказа: #{order_id}"
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение клиенту: {e}")
+        
+        await callback.answer("✅ Заказ подтвержден и клиент уведомлен")
+        
+        # Обновляем сообщение админу
         await callback.message.edit_text(
-            f"{callback.message.text}\n\n✅ ПОДТВЕРЖДЕНО АДМИНОМ"
+            f"{callback.message.text}\n\n✅ ПОДТВЕРЖДЕНО\n👤 Клиент уведомлен"
         )
+    
     elif action == "reject":
-        await callback.answer("❌ Заказ отклонен")
+        # Отклоняем заказ
+        reject_order(order_id, ADMIN_ID)
+        
+        # ОТПРАВЛЯЕМ СООБЩЕНИЕ КЛИЕНТУ
+        try:
+            await bot.send_message(
+                order["user_id"],
+                f"❌ Заказ не подтвержден\n\n"
+                f"Заказ #{order_id} отклонен.\n"
+                f"Возможные причины:\n"
+                f"• Неверные реквизиты оплаты\n"
+                f"• Нечеткий скриншот\n"
+                f"• Несоответствие суммы\n\n"
+                f"📞 Для уточнения напишите: @{SUPPORT_USERNAME}"
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение клиенту: {e}")
+        
+        await callback.answer("❌ Заказ отклонен и клиент уведомлен")
+        
+        # Обновляем сообщение админу
         await callback.message.edit_text(
-            f"{callback.message.text}\n\n❌ ОТКЛОНЕНО АДМИНОМ"
+            f"{callback.message.text}\n\n❌ ОТКЛОНЕНО\n👤 Клиент уведомлен"
         )
 
 # ===== ОБРАБОТКА ЛЮБЫХ СООБЩЕНИЙ =====
@@ -399,6 +600,7 @@ async def initialize_bot():
     try:
         me = await bot.get_me()
         print(f"✅ Бот @{me.username} готов к работе!")
+        print(f"📁 База данных: {DB_FILE}")
         return True
     except Exception as e:
         print(f"❌ Ошибка инициализации бота: {e}")
